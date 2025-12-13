@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Motion classifier</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui; padding: 16px; }
+    button { font-size: 18px; padding: 12px 16px; }
+    pre { background:#f3f3f3; padding: 12px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <h2>Edge Impulse Motion Classifier</h2>
+  <button id="start">Start detection</button>
+  <pre id="out">Not started</pre>
+
+  <script src="edge-impulse-standalone.js"></script>
+  <script>
+    const AZURE_FUNCTION_URL = "PASTE_YOUR_FUNCTION_URL_HERE"; // <- step 5
+
+    let classifier;
+    let running = false;
+
+    // Buffer for motion samples (we'll build a rolling window)
+    const samples = [];
+    const MAX_SAMPLES = 200; // may need adjustment to match your model
+
+    function bestResult(res) {
+      let best = { label: null, value: -1 };
+      for (const r of res.results) {
+        if (r.value > best.value) best = r;
+      }
+      return best;
+    }
+
+    async function sendToAzure(label, confidence) {
+      await fetch(AZURE_FUNCTION_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, confidence })
+      });
+    }
+
+    async function requestMotionPermissionIfNeeded() {
+      // iOS requires explicit permission
+      if (typeof DeviceMotionEvent !== "undefined" &&
+          typeof DeviceMotionEvent.requestPermission === "function") {
+        const p = await DeviceMotionEvent.requestPermission();
+        if (p !== "granted") throw new Error("Motion permission not granted");
+      }
+    }
+
+    async function startDetection() {
+      await requestMotionPermissionIfNeeded();
+
+      if (!classifier) {
+        classifier = new EdgeImpulseClassifier();
+        await classifier.init();
+      }
+
+      running = true;
+      document.getElementById("out").textContent = "Running... move phone";
+
+      window.addEventListener("devicemotion", async (e) => {
+        if (!running) return;
+
+        const ax = e.accelerationIncludingGravity?.x ?? 0;
+        const ay = e.accelerationIncludingGravity?.y ?? 0;
+        const az = e.accelerationIncludingGravity?.z ?? 0;
+
+        samples.push(ax, ay, az);
+
+        // keep rolling window
+        if (samples.length > MAX_SAMPLES * 3) {
+          samples.splice(0, 3);
+        }
+
+        // only classify when we have enough data
+        if (samples.length === MAX_SAMPLES * 3) {
+          try {
+            const res = classifier.classify(samples, false);
+            const b = bestResult(res);
+
+            document.getElementById("out").textContent =
+              Top: ${b.label} (${b.value.toFixed(3)})\n\nFull:\n + JSON.stringify(res, null, 2);
+
+            // Trigger condition (change label + threshold)
+            if (b.label === "shake" && b.value >= 0.80) {
+              await sendToAzure(b.label, b.value);
+            }
+          } catch (err) {
+            document.getElementById("out").textContent = "Error: " + err;
+          }
+        }
+      }, { passive: true });
+    }
+
+    document.getElementById("start").onclick = startDetection;
+  </script>
+</body>
+</html>
