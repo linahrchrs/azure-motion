@@ -1,11 +1,16 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8" />
   <title>Edge Impulse Motion Classifier</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: -apple-system, system-ui, sans-serif; padding: 16px; }
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      padding: 16px;
+    }
+
     button {
       font-size: 18px;
       padding: 10px 18px;
@@ -14,7 +19,11 @@
       background: #007aff;
       color: white;
     }
-    button:active { opacity: 0.7; }
+
+    button:active {
+      opacity: 0.7;
+    }
+
     pre {
       background: #f3f3f3;
       padding: 10px;
@@ -24,6 +33,7 @@
     }
   </style>
 </head>
+
 <body>
   <h2>Edge Impulse Motion Classifier</h2>
   <button id="start">Start detection</button>
@@ -38,7 +48,10 @@
   <!-- 3) Our logic -->
   <script>
     // TODO: later you can paste your real Azure URL here
-    var AZURE_FUNCTION_URL = ""; 
+    var AZURE_FUNCTION_URL = "";
+    const IOT_HUB_NAME = "ei-motion-hub-852572";
+    const DEVICE_ID = "android-phone";
+    const SAS_TOKEN = "SharedAccessSignature sr=%2Fdevices%2FHostName%3Dei-motion-hub-852572.azure-devices.neta&sig=&se=1765748570";
 
     var classifier = null;
     var running = false;
@@ -56,27 +69,43 @@
     }
 
     function sendToAzure(label, confidence) {
-      if (!AZURE_FUNCTION_URL || AZURE_FUNCTION_URL.indexOf("http") !== 0) {
-        return Promise.resolve(); // do nothing for now
-      }
-      return fetch(AZURE_FUNCTION_URL, {
+
+      const url =
+        `https://${IOT_HUB_NAME}.azure-devices.net/devices/${DEVICE_ID}` + `/messages/events?api-version=2021-04 -12`;
+
+      const payload = {
+        motion: label,
+        confidence: confidence,
+        timestamp: new Date().toISOString()
+      };
+
+      return fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: label, confidence: confidence })
-      });
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": SAS_TOKEN
+        },
+        body: JSON.stringify(payload)
+      })
+        .then(() => {
+          console.log("Sent to IoT Hub:", payload);
+        })
+        .catch(err => {
+          console.error("IoT Hub error:", err);
+        });
     }
 
     function requestMotionPermissionIfNeeded() {
-      return new Promise(function(resolve, reject) {
+      return new Promise(function (resolve, reject) {
         if (window.DeviceMotionEvent &&
-            typeof DeviceMotionEvent.requestPermission === "function") {
+          typeof DeviceMotionEvent.requestPermission === "function") {
 
           DeviceMotionEvent.requestPermission()
-            .then(function(state) {
+            .then(function (state) {
               if (state === "granted") resolve();
               else reject("Motion permission not granted");
             })
-            .catch(function(err) { reject(err); });
+            .catch(function (err) { reject(err); });
         } else {
           // Older iOS / normal browsers – no explicit permission API
           resolve();
@@ -89,17 +118,17 @@
       out.textContent = "Start clicked, initializing...";
 
       requestMotionPermissionIfNeeded()
-        .then(function() {
+        .then(function () {
           if (!classifier) {
             classifier = new EdgeImpulseClassifier();
             return classifier.init();
           }
         })
-        .then(function() {
+        .then(function () {
           running = true;
           out.textContent = "Running... move the phone";
 
-          window.addEventListener("devicemotion", function(e) {
+          window.addEventListener("devicemotion", function (e) {
             if (!running) return;
 
             // No optional chaining to avoid Safari issues
@@ -133,16 +162,17 @@
             }
           }, { passive: true });
         })
-        .catch(function(err) {
+        .catch(function (err) {
           out.textContent = "Error: " + err;
         });
     }
 
     // Attach click handler once DOM is ready
-    window.addEventListener("load", function() {
+    window.addEventListener("load", function () {
       var btn = document.getElementById("start");
       btn.addEventListener("click", startDetection);
     });
   </script>
 </body>
+
 </html>
