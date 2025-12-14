@@ -69,9 +69,8 @@
     }
 
     function sendToAzure(label, confidence) {
-
       const url =
-        `https://${IOT_HUB_NAME}.azure-devices.net/devices/${DEVICE_ID}` + `/messages/events?api-version=2021-04 -12`;
+        `https://${IOT_HUB_NAME}.azure-devices.net/devices/${DEVICE_ID}` + `/messages/events ? api - version=2021-04 - 12`;
 
       const payload = {
         motion: label,
@@ -87,11 +86,13 @@
         },
         body: JSON.stringify(payload)
       })
-        .then(() => {
-          console.log("Sent to IoT Hub:", payload);
+        .then(res => {
+          document.getElementById("out").textContent =
+            "Sent to IoT Hub — HTTP " + res.status;
         })
         .catch(err => {
-          console.error("IoT Hub error:", err);
+          document.getElementById("out").textContent =
+            "IoT Hub error: " + err;
         });
     }
 
