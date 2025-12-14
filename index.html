@@ -2,12 +2,26 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Motion classifier</title>
+  <title>Edge Impulse Motion Classifier</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui; padding: 16px; }
-    button { font-size: 18px; padding: 12px 16px; }
-    pre { background:#f3f3f3; padding: 12px; border-radius: 10px; }
+    body { font-family: -apple-system, system-ui, sans-serif; padding: 16px; }
+    button {
+      font-size: 18px;
+      padding: 10px 18px;
+      border-radius: 999px;
+      border: none;
+      background: #007aff;
+      color: white;
+    }
+    button:active { opacity: 0.7; }
+    pre {
+      background: #f3f3f3;
+      padding: 10px;
+      border-radius: 12px;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 <body>
@@ -15,88 +29,120 @@
   <button id="start">Start detection</button>
   <pre id="out">Not started</pre>
 
+  <!-- 1) Edge Impulse WASM runtime -->
   <script src="edge-impulse-standalone.js"></script>
+
+  <!-- 2) Classifier wrapper from Edge Impulse (your long JS file) -->
+  <script src="run-impulse.js"></script>
+
+  <!-- 3) Our logic -->
   <script>
-    const AZURE_FUNCTION_URL = "PASTE_YOUR_FUNCTION_URL_HERE"; // <- step 5
+    // TODO: later you can paste your real Azure URL here
+    var AZURE_FUNCTION_URL = ""; 
 
-    let classifier;
-    let running = false;
-
-    // Buffer for motion samples (we'll build a rolling window)
-    const samples = [];
-    const MAX_SAMPLES = 200; // may need adjustment to match your model
+    var classifier = null;
+    var running = false;
+    var samples = [];
+    var MAX_SAMPLES = 100; // we can tune later
 
     function bestResult(res) {
-      let best = { label: null, value: -1 };
-      for (const r of res.results) {
-        if (r.value > best.value) best = r;
+      var best = { label: null, value: -1 };
+      for (var i = 0; i < res.results.length; i++) {
+        if (res.results[i].value > best.value) {
+          best = res.results[i];
+        }
       }
       return best;
     }
 
-    async function sendToAzure(label, confidence) {
-      await fetch(AZURE_FUNCTION_URL, {
+    function sendToAzure(label, confidence) {
+      if (!AZURE_FUNCTION_URL || AZURE_FUNCTION_URL.indexOf("http") !== 0) {
+        return Promise.resolve(); // do nothing for now
+      }
+      return fetch(AZURE_FUNCTION_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label, confidence })
+        body: JSON.stringify({ label: label, confidence: confidence })
       });
     }
 
-    async function requestMotionPermissionIfNeeded() {
-      // iOS requires explicit permission
-      if (typeof DeviceMotionEvent !== "undefined" &&
-          typeof DeviceMotionEvent.requestPermission === "function") {
-        const p = await DeviceMotionEvent.requestPermission();
-        if (p !== "granted") throw new Error("Motion permission not granted");
-      }
+    function requestMotionPermissionIfNeeded() {
+      return new Promise(function(resolve, reject) {
+        if (window.DeviceMotionEvent &&
+            typeof DeviceMotionEvent.requestPermission === "function") {
+
+          DeviceMotionEvent.requestPermission()
+            .then(function(state) {
+              if (state === "granted") resolve();
+              else reject("Motion permission not granted");
+            })
+            .catch(function(err) { reject(err); });
+        } else {
+          // Older iOS / normal browsers – no explicit permission API
+          resolve();
+        }
+      });
     }
 
-    async function startDetection() {
-      await requestMotionPermissionIfNeeded();
+    function startDetection() {
+      var out = document.getElementById("out");
+      out.textContent = "Start clicked, initializing...";
 
-      if (!classifier) {
-        classifier = new EdgeImpulseClassifier();
-        await classifier.init();
-      }
-
-      running = true;
-      document.getElementById("out").textContent = "Running... move phone";
-
-      window.addEventListener("devicemotion", async (e) => {
-        if (!running) return;
-
-        const ax = e.accelerationIncludingGravity?.x ?? 0;
-        const ay = e.accelerationIncludingGravity?.y ?? 0;
-        const az = e.accelerationIncludingGravity?.z ?? 0;
-
-        samples.push(ax, ay, az);
-
-        // keep rolling window
-        if (samples.length > MAX_SAMPLES * 3) {
-          samples.splice(0, 3);
-        }
-
-        // only classify when we have enough data
-        if (samples.length === MAX_SAMPLES * 3) {
-          try {
-            const res = classifier.classify(samples, false);
-            const b = bestResult(res);
-
-            document.getElementById("out").textContent =
-              Top: ${b.label} (${b.value.toFixed(3)})\n\nFull:\n + JSON.stringify(res, null, 2);
-
-            // Trigger condition (change label + threshold)
-            if (b.label === "shake" && b.value >= 0.80) {
-              await sendToAzure(b.label, b.value);
-            }
-          } catch (err) {
-            document.getElementById("out").textContent = "Error: " + err;
+      requestMotionPermissionIfNeeded()
+        .then(function() {
+          if (!classifier) {
+            classifier = new EdgeImpulseClassifier();
+            return classifier.init();
           }
-        }
-      }, { passive: true });
+        })
+        .then(function() {
+          running = true;
+          out.textContent = "Running... move the phone";
+
+          window.addEventListener("devicemotion", function(e) {
+            if (!running) return;
+
+            // No optional chaining to avoid Safari issues
+            var acc = e.accelerationIncludingGravity || { x: 0, y: 0, z: 0 };
+            var ax = acc.x || 0;
+            var ay = acc.y || 0;
+            var az = acc.z || 0;
+
+            samples.push(ax, ay, az);
+
+            if (samples.length > MAX_SAMPLES * 3) {
+              samples.splice(0, 3);
+            }
+
+            if (samples.length === MAX_SAMPLES * 3) {
+              try {
+                var res = classifier.classify(samples, false);
+                var b = bestResult(res);
+
+                out.textContent =
+                  "Top: " + b.label + " (" + b.value.toFixed(3) + ")\n\n" +
+                  "Raw:\n" + JSON.stringify(res, null, 2);
+
+                // Example trigger for Azure
+                if (b.label === "shake" && b.value >= 0.8) {
+                  sendToAzure(b.label, b.value);
+                }
+              } catch (err) {
+                out.textContent = "Error during classify: " + err;
+              }
+            }
+          }, { passive: true });
+        })
+        .catch(function(err) {
+          out.textContent = "Error: " + err;
+        });
     }
 
-    document.getElementById("start").onclick = startDetection;
+    // Attach click handler once DOM is ready
+    window.addEventListener("load", function() {
+      var btn = document.getElementById("start");
+      btn.addEventListener("click", startDetection);
+    });
   </script>
 </body>
 </html>
